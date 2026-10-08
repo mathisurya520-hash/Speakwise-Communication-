@@ -7,7 +7,7 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [loading, setLoading] = useState(true);
 
-  const API_URL = 'https://speakwiseai-1.onrender.com/api';
+  const API_URL = import.meta.env.VITE_API_URL || 'https://speakwiseai-1.onrender.com/api';
 
   useEffect(() => {
     if (token) {
