@@ -68,7 +68,7 @@ const mockGDParticipants = (topic) => {
   ];
 };
 
-const mockGDDiscussion = (topic, messages) => {
+const mockGDDiscussion = (topic, messages, speechMetrics = null) => {
   const participants = mockGDParticipants(topic);
   const userMessagesCount = messages.filter(m => m.sender === 'user').length;
   
@@ -79,7 +79,7 @@ const mockGDDiscussion = (topic, messages) => {
   
   let aiResponse = "";
   if (userMessagesCount === 0) {
-    aiResponse = `Welcome everyone to our group discussion on: "${topic}". Let's kick off. Siddharth, what are your thoughts?`;
+    aiResponse = `Welcome everyone to our executive group discussion on: "${topic}". Let's kick off. Siddharth, what are your initial strategic thoughts?`;
   } else {
     const lastUserMsg = [...messages].reverse().find(m => m.sender === 'user')?.content || "";
     aiResponse = `Reflecting on the user's point about "${lastUserMsg.substring(0, 30)}...", I agree with Rohan's balancing approach, but we must also address Ananya's data concerns. What do you all think?`;
@@ -87,18 +87,41 @@ const mockGDDiscussion = (topic, messages) => {
 
   // Calculate scores (if ending)
   const isFinal = messages.length >= 6;
-  const analysis = isFinal ? {
-    overallScore: 82,
-    collabScore: 88,
-    argumentQuality: 78,
-    leadershipScore: 80,
-    participationPercent: Math.round((userMessagesCount / (messages.length + 1)) * 100),
-    feedback: "Excellent leadership display. You successfully synthesis arguments from both Siddharth and Ananya, steering the discussion productively.",
-    suggestions: [
-      "Ask silent members (like Rohan) for input to show inclusive leadership.",
-      "Back your arguments with specific examples rather than general opinions."
-    ]
-  } : null;
+  let analysis = null;
+
+  if (isFinal) {
+    const userText = messages.filter(m => m.sender === 'user').map(m => m.content).join(' ');
+    const words = userText.split(/\s+/).filter(Boolean).length;
+    const detectedFillers = (userText.match(/\b(um|uh|like|basically|you know|so|actually)\b/gi) || []);
+    const fillerCount = speechMetrics?.totalFillers !== undefined ? speechMetrics.totalFillers : detectedFillers.length;
+    const wpm = speechMetrics?.avgWpm ? Math.round(speechMetrics.avgWpm) : (words > 0 ? Math.round(words * 1.3) : 142);
+    const fillerList = speechMetrics?.fillerList && speechMetrics.fillerList.length > 0 
+      ? speechMetrics.fillerList 
+      : Array.from(new Set(detectedFillers.map(f => f.toLowerCase())));
+
+    analysis = {
+      overallScore: Math.min(98, Math.max(65, Math.round((84 + Math.max(60, 95 - fillerCount * 3)) / 2))),
+      collabScore: 88,
+      argumentQuality: 82,
+      leadershipScore: 85,
+      participationPercent: Math.round((userMessagesCount / (messages.length + 1)) * 100),
+      speechMetrics: {
+        speakingPaceWPM: wpm,
+        paceStatus: wpm >= 130 && wpm <= 165 ? "Optimal Cadence (130-165 WPM)" : (wpm > 165 ? "Fast / Slightly Rushed" : "Deliberate / Hesitant"),
+        fillerWordsCount: fillerCount,
+        fillerWordsList: fillerList.length > 0 ? fillerList : ["None detected"],
+        fluencyScore: Math.min(98, Math.max(65, 92 - fillerCount * 3)),
+        vocalConfidence: Math.min(96, Math.max(70, 89 - fillerCount * 2)),
+        clarity: 88
+      },
+      feedback: "Exceptional boardroom leadership and articulate vocal delivery. You synthesized arguments effectively from multiple stakeholders while maintaining a persuasive, executive cadence.",
+      suggestions: [
+        "Replace filler phrases with silent 1-second pauses when formulating rebuttals.",
+        "Acknowledge Ananya's statistical points directly before advancing your next proposal.",
+        "Maintain your steady pacing when counter-arguing assertive participants like Elena."
+      ]
+    };
+  }
 
   return {
     sender: speaker.name,
@@ -325,8 +348,8 @@ exports.analyzeSpeech = async (transcript) => {
   }
 };
 
-exports.generateGDResponse = async (topic, messages) => {
-  if (!genAI) return mockGDDiscussion(topic, messages);
+exports.generateGDResponse = async (topic, messages, speechMetrics = null) => {
+  if (!genAI) return mockGDDiscussion(topic, messages, speechMetrics);
 
   try {
     const model = genAI.getGenerativeModel({
@@ -336,14 +359,20 @@ exports.generateGDResponse = async (topic, messages) => {
 
     const messagesJson = JSON.stringify(messages);
     const isFinal = messages.length >= 6;
+    const speechMetricsContext = speechMetrics
+      ? `User Spoken Speech Delivery Telemetry: Average Speaking Pace: ${speechMetrics.avgWpm || 140} WPM, Total Fillers: ${speechMetrics.totalFillers || 0}, Fillers Detected: ${JSON.stringify(speechMetrics.fillerList || [])}, Spoken Turns: ${speechMetrics.spokenTurnsCount || 0}.`
+      : "User participated via voice speech recognition / text input.";
 
-    const prompt = `You are orchestrating an AI Group Discussion Trainer.
+    const prompt = `You are orchestrating an AI Group Discussion Boardroom Trainer.
     Topic: "${topic}"
     Discussion History: ${messagesJson}
+    ${speechMetricsContext}
 
-    Choose one of the 4 virtual participants (with different personalities and names: Siddharth - Visionary, Ananya - Data Critic, Rohan - Mediator, Elena - Challenger) who hasn't spoken in the last turn. Generate their response to the discussion.
+    Choose one of the 4 virtual participants (with different personalities and names: Siddharth - Visionary, Ananya - Data Critic, Rohan - Mediator, Elena - Challenger) who hasn't spoken in the last turn. Generate their natural conversational response to the ongoing discussion.
     
-    If the history contains 6 or more turns (isFinal = ${isFinal}), evaluate the user's performance and generate an "analysis" node.
+    If the history contains 6 or more turns (isFinal = ${isFinal}), thoroughly evaluate the user's performance across BOTH:
+    1. Strategic Group Discussion Criteria: Collaboration, Argument Quality, Leadership, and Participation.
+    2. Spoken Vocal Delivery Criteria: Speaking pace (WPM), filler words count and list, fluency score, vocal confidence, and clarity.
 
     Return a JSON object matching this schema exactly:
     {
@@ -356,8 +385,17 @@ exports.generateGDResponse = async (topic, messages) => {
         "argumentQuality": number (0-100),
         "leadershipScore": number (0-100),
         "participationPercent": number (0-100),
-        "feedback": "string",
-        "suggestions": ["string"]
+        "speechMetrics": {
+          "speakingPaceWPM": number (words per minute, e.g. 135-160),
+          "paceStatus": "string (e.g. Optimal Cadence (130-165 WPM), Slightly Rushed, or Deliberate)",
+          "fillerWordsCount": number,
+          "fillerWordsList": ["string"],
+          "fluencyScore": number (0-100),
+          "vocalConfidence": number (0-100),
+          "clarity": number (0-100)
+        },
+        "feedback": "string (constructive feedback analyzing both boardroom strategy and spoken delivery)",
+        "suggestions": ["string (3 actionable tips addressing speech pace, fillers, or debate posture)"]
       }
     }`;
 
@@ -365,7 +403,7 @@ exports.generateGDResponse = async (topic, messages) => {
     return safeParseJSON(result.response.text());
   } catch (error) {
     console.error("Gemini GD response failed. Falling back to mock:", error);
-    return mockGDDiscussion(topic, messages);
+    return mockGDDiscussion(topic, messages, speechMetrics);
   }
 };
 

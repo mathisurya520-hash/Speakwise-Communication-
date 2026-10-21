@@ -188,13 +188,13 @@ exports.analyzeSpeech = async (req, res) => {
 // @route   POST /api/modules/gd/reply
 // @access  Private
 exports.gdReply = async (req, res) => {
-  const { topic, messages } = req.body; // messages contains array of {sender, content}
+  const { topic, messages, speechMetrics } = req.body; // messages contains array of {sender, content}
   if (!topic || !messages) {
     return res.status(400).json({ message: "Topic and message history are required." });
   }
 
   try {
-    const reply = await geminiService.generateGDResponse(topic, messages);
+    const reply = await geminiService.generateGDResponse(topic, messages, speechMetrics);
 
     // If final, save GD session as a report
     let report = null;
@@ -211,16 +211,29 @@ exports.gdReply = async (req, res) => {
           collaboration: reply.analysis.collabScore,
           argumentQuality: reply.analysis.argumentQuality,
           leadership: reply.analysis.leadershipScore,
-          participation: reply.analysis.participationPercent
+          participation: reply.analysis.participationPercent,
+          speechMetrics: reply.analysis.speechMetrics || {
+            speakingPaceWPM: speechMetrics?.avgWpm || 140,
+            paceStatus: 'Optimal Cadence (130-165 WPM)',
+            fillerWordsCount: speechMetrics?.totalFillers || 0,
+            fillerWordsList: speechMetrics?.fillerList || ["None detected"],
+            fluencyScore: 88,
+            vocalConfidence: 86,
+            clarity: 88
+          }
         },
         feedback: reply.analysis.feedback,
         suggestions: reply.analysis.suggestions,
         transcript: messages.map(m => `${m.sender}: ${m.content}`).join('\n')
       });
 
+      const speechData = reply.analysis.speechMetrics || {};
       updatedUser = await awardXP(req.user._id, 100, {
-        clarity: reply.analysis.argumentQuality,
-        confidence: reply.analysis.leadershipScore
+        clarity: speechData.clarity || reply.analysis.argumentQuality || 85,
+        confidence: speechData.vocalConfidence || reply.analysis.leadershipScore || 85,
+        fluency: speechData.fluencyScore || 85,
+        speakingSpeed: speechData.speakingPaceWPM ? Math.min(100, Math.round(speechData.speakingPaceWPM / 2)) : 70,
+        fillerWords: speechData.fillerWordsCount || 0
       });
 
       newBadges = await checkAchievements(req.user._id, 'gd', reply.analysis.overallScore);
